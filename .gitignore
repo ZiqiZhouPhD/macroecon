@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Simulation outputs
+outputs/
+
+# VSCode
+.vscode/
