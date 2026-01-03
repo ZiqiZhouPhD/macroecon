@@ -9,3 +9,6 @@ outputs/
 
 # VSCode
 .vscode/
+
+# VSCode
+*.DS_Store
