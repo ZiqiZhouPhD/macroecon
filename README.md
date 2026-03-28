@@ -23,24 +23,24 @@ The current minimal experiment is located in `experiments/barter_economy.py`.
 ## Code Structure
 
 ```
-
 src/
-agent.py        # agent definitions and state variables
-behavior.py     # decision rules and behavioral policies
-relations.py    # interaction structures between agents
-logic.py        # simulation loop and stepwise dynamics
-functions.py    # utility and helper functions
+  macroABM/       # installable package
+    agent.py      # agent definitions and state variables
+    behavior.py   # decision rules and behavioral policies
+    relation.py   # interaction structures between agents
+    logic.py      # simulation loop and stepwise dynamics
+    functions.py  # utility and helper functions
 
 experiments/
-barter_economy.py  # runnable simulation example
+  barter_economy.py  # runnable simulation example
+
 outputs/
-figures/        # generated plots
-data/           # simulation results
+  figures/        # generated plots
+  data/           # simulation results
 
 notes/
-todo.md         # planned extensions and future improvements
-
-````
+  todo.md         # planned extensions and future improvements
+```
 
 ---
 
@@ -53,7 +53,13 @@ git clone https://github.com/ZiqiZhouPhD/macroecon.git
 cd macroecon
 ```
 
-2. Run the example simulation:
+2. Install the package:
+
+```bash
+pip install -e .
+```
+
+3. Run the example simulation:
 
 ```bash
 python experiments/barter_economy.py
@@ -61,7 +67,7 @@ python experiments/barter_economy.py
 
 Simulation outputs (figures and data) are saved to the `outputs/` folder.
 
-2. Modify parameters for alternative use cases.
+4. Modify parameters for alternative use cases.
 
 ---
 

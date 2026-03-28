@@ -6,21 +6,14 @@
 # 		set volumes
 # 	execute relation transactions
 
-import sys
 import os
-
-# Add the parent 'src' folder to sys.path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.join(current_dir, '..', 'src')
-sys.path.insert(0, src_dir)
-
-import agent, relation, logic
 import matplotlib.pyplot as plt
+import macroABM
 
 # Set up
-household = agent.HouseHold('Household', logic.LinearHouseHoldLogic)
-firm = agent.Firm('Firm', logic.LinearFirmLogic)
-labor_consumption_relation = relation.BarterMarket(
+household = macroABM.HouseHold('Household', macroABM.LinearHouseHoldLogic)
+firm = macroABM.Firm('Firm', macroABM.LinearFirmLogic)
+labor_consumption_relation = macroABM.BarterMarket(
 	items = ('labor', 'consumption'),
 	agents = (household, firm),
 	volumes = [1, 1]
