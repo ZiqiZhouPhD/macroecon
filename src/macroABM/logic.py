@@ -108,3 +108,79 @@ class LinearFirmLogic(FirmLogic):
 		if denominator > 0: # Unstable, move away
 			denominator = - denominator
 		self.firm.relations['labor_consumption'].price -= price * numerator / denominator
+
+class MonetaryHouseHoldLogic(HouseHoldLogic):
+	def __init__(self, household):
+		self.household = household
+		self.elasticity = 0.2
+		self.labor_0 = 1
+		self.real_wage_0 = None
+		self.target_real_cash = 2
+		self.propensity_income = 0.8
+		self.propensity_wealth = 0.15
+
+	def update_volumes(self):
+		labor_market = self.household.relations['labor']
+		goods_market = self.household.relations['goods']
+		real_wage = labor_market.price / goods_market.price
+		if self.real_wage_0 is None:
+			self.real_wage_0 = real_wage
+
+		labor_supply = self.labor_0 * (real_wage / self.real_wage_0) ** self.elasticity
+		real_cash = self.household.cash / goods_market.previous_price
+		real_income = labor_market.price * labor_supply / goods_market.price
+		buffer_gap = real_cash - self.target_real_cash
+		desired_consumption = (
+			self.propensity_income * real_income
+			+ self.propensity_wealth * buffer_gap
+		)
+		desired_consumption = max(0, desired_consumption)
+
+		labor_market.supply_volume = labor_supply
+		goods_market.demand_volume = desired_consumption
+		self.household.step_desired_consumption = desired_consumption
+
+class MonetaryFirmLogic(FirmLogic):
+	def __init__(self, firm):
+		self.firm = firm
+		self.productivity = 2
+		self.effective_productivity = self.productivity
+		self.wage = 1
+		self.price_adjustment = 0.1
+		self.liquidity_scale = 4
+		self.min_productivity_factor = 0.5
+		self.max_productivity_factor = 1.25
+		self.minimum_price = 1e-6
+
+	def get_liquidity_factor(self, real_cash):
+		real_cash = max(0, real_cash)
+		raw_factor = (
+			self.min_productivity_factor
+			+ (self.max_productivity_factor - self.min_productivity_factor)
+			* real_cash / (real_cash + self.liquidity_scale)
+		)
+		return min(self.max_productivity_factor, max(self.min_productivity_factor, raw_factor))
+
+	def update_prices(self):
+		labor_market = self.firm.relations['labor']
+		goods_market = self.firm.relations['goods']
+		labor_market.price = self.wage
+
+		if goods_market.volume > 0:
+			demand_supply_ratio = goods_market.demand_volume / goods_market.volume
+			goods_market.price *= 1 + self.price_adjustment * (demand_supply_ratio - 1)
+			goods_market.price = max(self.minimum_price, goods_market.price)
+
+	def update_volumes(self):
+		labor_market = self.firm.relations['labor']
+		goods_market = self.firm.relations['goods']
+		real_cash = self.firm.cash / goods_market.previous_price
+		self.effective_productivity = self.productivity * self.get_liquidity_factor(real_cash)
+
+		expected_sales = max(goods_market.demand_volume, goods_market.volume, 1e-6)
+		labor_demand = expected_sales / self.effective_productivity
+		labor_affordability = real_cash * goods_market.previous_price / labor_market.price
+		labor_demand = min(labor_demand, max(0, labor_affordability))
+
+		labor_market.demand_volume = labor_demand
+		self.firm.step_labor_demand = labor_demand
