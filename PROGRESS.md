@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-05-06
+Last updated: 2026-05-19
 
 ## Summary
 
@@ -9,6 +9,21 @@ The project has moved from a barter-only proof of concept to a backward-compatib
 The barter experiment remains available as the baseline. A new monetary experiment introduces cash holdings, money-mediated labor and goods markets, real-balance behavior, liquidity-dependent firm productivity, no-inventory goods settlement, optional nonnegative-cash constraints, richer plotting, and tests.
 
 The monetary model is functional, but the current behavior rules do not yet produce the desired well-balanced interior equilibrium. The present run tends toward a liquidity-constrained corner where cash accumulates at the firm and household activity collapses to a low level.
+
+---
+
+## 2026-05-19
+
+Redesigned the monetary economy model and wrote full documentation in `experiments/monetary_economy.md`. No code was changed; all decisions were documented first for later implementation.
+
+Key design decisions made:
+
+- **Firm pricing via Nelder-Mead**: the firm jointly sets wage and goods price each round using a 2D Nelder-Mead search over (wage, goods price), optimizing real goods profit. The simplex is initialized over 3 steps at `(w0, p0)`, `(1.2·w0, p0)`, `(w0, 1.2·p0)` where `w0` and `p0` are passed from the experiment. From step 3 onward, standard Nelder-Mead iterations proceed one step per round.
+- **Profit defined as real goods**: `profit = production − consumption` in physical units. This exits the economy each round with no inventory. The firm maximizes this quantity.
+- **Labor market fully absorbed**: the firm takes all household labor supply with no short-side rationing.
+- **Effective productivity moves to price-update stage**: computed from last step's firm cash before household volumes are set.
+- **Household affordability cap**: desired consumption is capped so the household cannot go cash-negative.
+- **Firm cash drain**: a dividend transfer from firm to household each step, proportional to `log(firm_cash / household_cash)`, justified by the symmetric real-world pressures of household investment and firm dividend payout.
 
 ---
 
