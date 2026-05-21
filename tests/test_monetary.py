@@ -170,8 +170,9 @@ class MonetaryBehaviorTests(unittest.TestCase):
 			goods_price=2,
 		)
 
-		low_nominal_firm.update_volumes()
-		high_nominal_same_real_firm.update_volumes()
+		# Effective productivity is computed in update_prices().
+		low_nominal_firm.update_prices()
+		high_nominal_same_real_firm.update_prices()
 
 		self.assertAlmostEqual(
 			low_nominal_firm.logic.effective_productivity,
@@ -189,8 +190,8 @@ class MonetaryBehaviorTests(unittest.TestCase):
 			goods_price=1,
 		)
 
-		low_cash_firm.update_volumes()
-		high_cash_firm.update_volumes()
+		low_cash_firm.update_prices()
+		high_cash_firm.update_prices()
 
 		self.assertGreater(
 			high_cash_firm.logic.effective_productivity,
@@ -200,7 +201,7 @@ class MonetaryBehaviorTests(unittest.TestCase):
 	def test_productivity_liquidity_effect_is_bounded(self):
 		_, firm, _, _ = make_monetary_economy(firm_cash=10_000)
 
-		firm.update_volumes()
+		firm.update_prices()
 
 		self.assertGreaterEqual(
 			firm.logic.effective_productivity,
@@ -213,48 +214,113 @@ class MonetaryBehaviorTests(unittest.TestCase):
 		self.assertTrue(math.isfinite(firm.logic.effective_productivity))
 
 
-class MonetarySimulationTests(unittest.TestCase):
-	def test_one_monetary_step_conserves_total_cash_and_sells_production(self):
-		household, firm, labor_market, goods_market = make_monetary_economy()
-		initial_total_cash = household.cash + firm.cash
+class NelderMeadPricingTests(unittest.TestCase):
+	def test_nm_uses_seed_prices_for_first_three_steps(self):
+		_, firm, labor_market, goods_market = make_monetary_economy()
+		w0, p0 = labor_market.price, goods_market.price
 
+		firm.update_prices()  # step 0
+		self.assertAlmostEqual(labor_market.price, w0)
+		self.assertAlmostEqual(goods_market.price, p0)
+
+		firm.logic.record_profit(0)
+		firm.update_prices()  # step 1 — scaled wage seed
+		self.assertAlmostEqual(labor_market.price, w0 * 1.2)
+		self.assertAlmostEqual(goods_market.price, p0)
+
+		firm.logic.record_profit(0)
+		firm.update_prices()  # step 2 — scaled price seed
+		self.assertAlmostEqual(labor_market.price, w0)
+		self.assertAlmostEqual(goods_market.price, p0 * 1.2)
+
+	def test_nm_transitions_to_reflect_phase_after_step_3(self):
+		_, firm, labor_market, goods_market = make_monetary_economy()
+		for _ in range(3):
+			firm.update_prices()
+			firm.logic.record_profit(0)
+		# Step 3 finalizes the simplex and proposes the first reflected point.
+		firm.update_prices()
+		self.assertEqual(firm.logic._nm._action, 'reflect')
+		self.assertIsNotNone(firm.logic._nm._pending)
+
+	def test_nm_accepts_improved_reflection(self):
+		_, firm, labor_market, goods_market = make_monetary_economy()
+		# Give seeds distinct profits so best=10, second=5, worst=0.
+		firm.update_prices()
+		firm.logic.record_profit(10)
+		firm.update_prices()
+		firm.logic.record_profit(5)
+		firm.update_prices()
+		firm.logic.record_profit(0)
+		firm.update_prices()  # step 3: proposes first reflection
+		# A value between second(5) and best(10) is accepted directly without expand.
+		firm.logic.record_profit(7)
+		firm.update_prices()  # step 4: should accept and re-enter reflect
+		self.assertEqual(firm.logic._nm._action, 'reflect')
+
+	def test_nm_prices_are_always_positive(self):
+		_, firm, labor_market, goods_market = make_monetary_economy()
+		for i in range(10):
+			firm.update_prices()
+			firm.logic.record_profit(float(i % 3))
+			self.assertGreater(labor_market.price, 0)
+			self.assertGreater(goods_market.price, 0)
+
+
+class MonetarySimulationTests(unittest.TestCase):
+	def _run_one_monetary_step(self, household, firm, labor_market, goods_market):
 		for agent in [household, firm]:
 			agent.step_preprocess()
+		for agent in [household, firm]:
 			agent.update_prices()
 		for agent in [household, firm]:
 			agent.update_volumes()
 
-		labor_market.match_short_side()
+		# Full labor absorption — no rationing.
+		labor_market.volume = labor_market.supply_volume
 		labor_market.handle_transactions()
-		firm.step_postprocess()
-		goods_market.supply_volume = firm.step_production
-		goods_market.volume = firm.step_production
+
+		firm.step_production = firm.step_labor * firm.step_effective_productivity
+
+		# Demand-determined goods market.
+		goods_market.volume = min(goods_market.demand_volume, firm.step_production)
 		goods_market.handle_transactions()
 
+		goods_profit = firm.step_production - goods_market.volume
+		firm.step_profit_goods = goods_profit
+		firm.logic.record_profit(goods_profit)
+
+		for market in [labor_market, goods_market]:
+			market.commit_price()
+
+	def test_one_monetary_step_conserves_total_cash(self):
+		household, firm, labor_market, goods_market = make_monetary_economy()
+		initial_total_cash = household.cash + firm.cash
+
+		self._run_one_monetary_step(household, firm, labor_market, goods_market)
+
 		self.assertAlmostEqual(household.cash + firm.cash, initial_total_cash)
-		self.assertAlmostEqual(goods_market.volume, firm.step_production)
-		self.assertAlmostEqual(household.step_consumption, firm.step_production)
-		self.assertAlmostEqual(firm.step_product_sold, -firm.step_production)
 
-	def test_price_rises_when_desired_consumption_exceeds_previous_sales(self):
-		_, firm, _, goods_market = make_monetary_economy()
-		goods_market.volume = 1
-		goods_market.demand_volume = 2
-		old_price = goods_market.price
+	def test_household_consumption_does_not_exceed_production(self):
+		household, firm, labor_market, goods_market = make_monetary_economy()
 
-		firm.update_prices()
+		self._run_one_monetary_step(household, firm, labor_market, goods_market)
 
-		self.assertGreater(goods_market.price, old_price)
+		self.assertLessEqual(goods_market.volume, firm.step_production + 1e-12)
 
-	def test_price_falls_when_desired_consumption_is_below_previous_sales(self):
-		_, firm, _, goods_market = make_monetary_economy()
-		goods_market.volume = 2
-		goods_market.demand_volume = 1
-		old_price = goods_market.price
+	def test_goods_profit_is_nonnegative(self):
+		household, firm, labor_market, goods_market = make_monetary_economy()
 
-		firm.update_prices()
+		self._run_one_monetary_step(household, firm, labor_market, goods_market)
 
-		self.assertLess(goods_market.price, old_price)
+		self.assertGreaterEqual(firm.step_profit_goods, 0)
+
+	def test_firm_absorbs_all_household_labor_supply(self):
+		household, firm, labor_market, goods_market = make_monetary_economy()
+
+		self._run_one_monetary_step(household, firm, labor_market, goods_market)
+
+		self.assertAlmostEqual(labor_market.volume, labor_market.supply_volume)
 
 
 if __name__ == '__main__':

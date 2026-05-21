@@ -1,43 +1,43 @@
 # TODO
 
-Project-level task list. Factored here from `notes/todo.md`.
+Last updated: 2026-05-20
 
 ---
 
-## Implementation — Monetary Economy Redesign
+## Immediate — Inspect and Tune
 
-Implement the model designed on 2026-05-19 and documented in `experiments/monetary_economy.md`.
-
-- [ ] **Nelder-Mead firm pricing**: replace fixed-wage + reactive goods-price logic in `MonetaryFirmLogic.update_prices` with a 2D Nelder-Mead search over (wage, goods price). Manage the simplex state across steps (one iteration per round, not run-to-convergence). Use `scipy.optimize.minimize` with `method='Nelder-Mead'` or implement simplex steps manually.
-- [ ] **Simplex initialization**: accept `wage_init` and `price_init` in the firm constructor. Seed the simplex at `(wage_init, price_init)`, `(wage_init * 1.2, price_init)`, `(wage_init, price_init * 1.2)` across the first 3 steps before iterating.
-- [ ] **Real goods profit**: record `production − consumption` (physical units) as the profit signal fed back to Nelder-Mead each round.
-- [ ] **Effective productivity in price-update stage**: move liquidity-factor computation from `update_volumes` to `update_prices` in `MonetaryFirmLogic`. It uses last step's ending firm cash.
-- [ ] **Full labor absorption**: remove short-side matching from the labor market. The firm absorbs all household labor supply.
-- [ ] **Household affordability cap**: cap desired consumption so spending cannot exceed household cash.
-- [ ] **Firm cash drain**: add a per-step dividend transfer from firm to household proportional to `log(firm_cash / household_cash)`. Include a proportionality constant as a tunable parameter.
-- [ ] **Update experiment loop**: align `experiments/monetary_economy.py` step sequence with the documented design (remove firm `update_volumes`, remove labor `match_short_side`, add drain step, record real goods profit).
-- [ ] **Update tests**: revise `tests/test_monetary.py` to cover the new behavior rules.
+- [ ] **Interior equilibrium tuning**: adjust `propensity_income`, `propensity_wealth`, `target_real_cash`, `dividend_rate`, and the liquidity factor bounds so the economy sustains a stable interior equilibrium rather than collapsing to the zero-cash corner.
+- [ ] **NM simplex collapse**: after a long run (total_time ≥ 200), inspect whether the simplex diameter collapses to near zero. If so, prices freeze and the optimizer has stopped exploring.
+- [ ] **Inspect full-NM effect**: compare the pricing trajectory to the previous reflect-contract-only version. Does expand/shrink improve stability or introduce more oscillation?
 
 ---
 
-## Refactoring — Project Structure
+## Near-Term
 
-- [ ] **Separate figures from data**: split `outputs/` into `outputs/figures/` and `outputs/data/` if not already done, and ensure each experiment writes to the correct subfolder.
-- [ ] **Number and folder experiments**: reorganize `experiments/` so each experiment lives in its own numbered subfolder, e.g. `experiments/01_barter/` and `experiments/02_monetary/`, with the experiment script and its markdown documentation together.
-- [ ] **Mirror output structure**: organize `outputs/` to mirror the experiment folder numbering, e.g. `outputs/01_barter/` and `outputs/02_monetary/`, so results are unambiguously linked to their experiment.
-- [ ] **Factor TODO to project root**: done — this file replaces `notes/todo.md`.
+- [ ] **NM reset heuristic**: add an optional periodic simplex reinitialization to `StepwiseNelderMead2D` (e.g., reset every N steps around the current best vertex) to prevent collapse on non-stationary landscapes.
+- [ ] **NM alternatives**: consider replacing Nelder-Mead with a finite-difference gradient estimate with exponential forgetting, which adapts more naturally to shifting objectives.
+- [ ] **Dividend sensitivity analysis**: sweep `dividend_rate` and observe its effect on cash distribution and output level.
+- [ ] **Remove `list_labor_supply` / `list_labor` redundancy**: both currently record `labor_market.supply_volume`. Differentiate once rationing is reintroduced, or drop one column.
 
 ---
 
-## Documentation
+## Code Quality
 
-- [ ] Add docstrings and usage examples for all public modules.
+- [ ] **Implement stub classes**: `QuadraticFunction` and `LaurentFunction` in `functions.py` have no implemented methods.
+- [ ] **Implement skeleton `Market`**: the base `Market` class in `relation.py` is incomplete.
+- [ ] **Clarify `behavior.py`**: `Behavior`, `QuantityPriceBehavior`, and `TaylorQuantityPriceBehavior` are unused by the monetary experiment. Decide whether to remove, repurpose, or document them.
+- [ ] **Add docstrings**: public modules lack usage examples and docstrings.
+
+---
+
+## Project Structure
+
+- [ ] **Number and folder experiments**: reorganize `experiments/` so each experiment lives in its own numbered subfolder (e.g., `experiments/01_barter/`, `experiments/02_monetary/`) with the experiment script and its markdown documentation together.
+- [ ] **Mirror output structure**: organize `outputs/` to mirror the experiment numbering (e.g., `outputs/01_barter/`, `outputs/02_monetary/`).
 
 ---
 
 ## Planned Extensions (Non-Blocking)
-
-From prior planning in `notes/todo.md`:
 
 - Government agent
 - Central Bank agent
@@ -46,3 +46,6 @@ From prior planning in `notes/todo.md`:
 - Resources agent
 - Import/Export agent
 - Firm classification: B2B, B2C, L2B, R2B
+- Policy shocks and comparative statics
+- Stochastic behavioral rules and Monte Carlo averaging
+- Animated visualization of economic flows

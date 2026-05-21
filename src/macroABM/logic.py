@@ -1,4 +1,5 @@
 from . import functions
+from .optimizer import StepwiseNelderMead2D
 
 class Logic:
 	def __init__(self, owner):
@@ -145,42 +146,43 @@ class MonetaryFirmLogic(FirmLogic):
 		self.firm = firm
 		self.productivity = 2
 		self.effective_productivity = self.productivity
-		self.wage = 1
-		self.price_adjustment = 0.1
 		self.liquidity_scale = 4
 		self.min_productivity_factor = 0.5
 		self.max_productivity_factor = 1.25
-		self.minimum_price = 1e-6
+
+		self._nm = None             # StepwiseNelderMead2D, lazily created on first update_prices()
+		self._nm_last_profit = None
 
 	def get_liquidity_factor(self, real_cash):
 		real_cash = max(0, real_cash)
-		raw_factor = (
+		raw = (
 			self.min_productivity_factor
 			+ (self.max_productivity_factor - self.min_productivity_factor)
 			* real_cash / (real_cash + self.liquidity_scale)
 		)
-		return min(self.max_productivity_factor, max(self.min_productivity_factor, raw_factor))
+		return min(self.max_productivity_factor, max(self.min_productivity_factor, raw))
+
+	def record_profit(self, profit_rate):
+		self._nm_last_profit = profit_rate
 
 	def update_prices(self):
 		labor_market = self.firm.relations['labor']
 		goods_market = self.firm.relations['goods']
-		labor_market.price = self.wage
 
-		if goods_market.volume > 0:
-			demand_supply_ratio = goods_market.demand_volume / goods_market.volume
-			goods_market.price *= 1 + self.price_adjustment * (demand_supply_ratio - 1)
-			goods_market.price = max(self.minimum_price, goods_market.price)
+		prev_real_cash = self.firm.cash / goods_market.previous_price
+		self.effective_productivity = self.productivity * self.get_liquidity_factor(prev_real_cash)
+		self.firm.step_effective_productivity = self.effective_productivity
+
+		if self._nm is None:
+			w0, p0 = labor_market.price, goods_market.price
+			self._nm = StepwiseNelderMead2D(
+				seeds=[(w0, p0), (w0 * 1.2, p0), (w0, p0 * 1.2)],
+				lower_bounds=(1e-3, 1e-3),
+			)
+
+		w, p = self._nm.advance(self._nm_last_profit)
+		labor_market.price = w
+		goods_market.price = p
 
 	def update_volumes(self):
-		labor_market = self.firm.relations['labor']
-		goods_market = self.firm.relations['goods']
-		real_cash = self.firm.cash / goods_market.previous_price
-		self.effective_productivity = self.productivity * self.get_liquidity_factor(real_cash)
-
-		expected_sales = max(goods_market.demand_volume, goods_market.volume, 1e-6)
-		labor_demand = expected_sales / self.effective_productivity
-		labor_affordability = real_cash * goods_market.previous_price / labor_market.price
-		labor_demand = min(labor_demand, max(0, labor_affordability))
-
-		labor_market.demand_volume = labor_demand
-		self.firm.step_labor_demand = labor_demand
+		pass

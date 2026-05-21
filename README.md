@@ -6,23 +6,27 @@ emergent macro dynamics from micro-level behavioral rules.
 The project currently contains two working example economies:
 
 - `experiments/barter_economy.py`: the original moneyless baseline, where one household and one firm barter labor for consumption goods.
-- `experiments/monetary_economy.py`: a monetary extension, where labor and goods trade through money, agents hold cash, and firm productivity depends on real liquidity.
+- `experiments/monetary_economy.py`: a monetary extension, where labor and goods trade through money, agents hold cash, firm productivity depends on real liquidity, and profits are recycled to the household via dividend transfers.
 
-This is still an early-stage research sandbox. The monetary model is functional, but its behavior rules are still being tuned.
+This is an early-stage research sandbox. The monetary model is structurally complete but its behavioral dynamics have not yet been tuned to produce a stable interior equilibrium, and several properties remain unconfirmed by the author.
 
 ---
 
 ## Current Features
 
-- Discrete-time agent-based simulation
-- Household and firm agent types
+- Discrete-time agent-based simulation parameterized by `dt` (economic periods per step)
+- Household and firm agent types with optional cash holdings
 - Backward-compatible barter market
 - Monetary market settlement through cash payments
 - Optional nonnegative-cash constraint at the agent level
 - Behavioral logic separated from agent state
-- Real-balance calculations: cash influences decisions only after conversion into goods-equivalent purchasing power
+- Real-balance calculations: cash influences decisions only after conversion to goods-equivalent purchasing power (`real_cash = cash / previous_goods_price`)
+- Firm joint wage/price optimization via full Nelder-Mead (reflect, expand, outside contract, inside contract, shrink) in a stateful one-evaluation-per-step design
+- Liquidity-dependent firm productivity (saturating function of real cash)
+- Log-ratio dividend recycling from firm to household
+- Rate-based time integration: all logic sets rates; `dt` appears only at transaction sites
 - CSV output and matplotlib visualization
-- Standard-library test suite under `tests/`
+- Standard-library test suite (57 tests) under `tests/`
 
 ---
 
@@ -34,19 +38,21 @@ src/
     __init__.py    # flat re-exports of public classes and helpers
     agent.py       # Agent, HouseHold, Firm state and cash accounting
     behavior.py    # price-quantity behavioral policies
-    relation.py    # BarterMarket and MoneyMarket
     logic.py       # barter and monetary decision logic
+    optimizer.py   # StepwiseNelderMead2D — stateful one-eval-per-step NM
+    relation.py    # BarterMarket and MoneyMarket
     functions.py   # math utility classes
     utils.py       # goods-equivalent conversion helpers
 
 experiments/
   barter_economy.py    # moneyless baseline simulation
-  monetary_economy.py  # monetary simulation with cash/liquidity
+  monetary_economy.py  # monetary simulation with cash, liquidity, dividends
 
 tests/
-  test_barter.py
-  test_monetary.py
-  test_utils.py
+  test_barter.py       # barter compatibility
+  test_monetary.py     # money market, economic behavior, NM integration
+  test_optimizer.py    # full NM algorithm correctness and convergence
+  test_utils.py        # goods-equivalent helpers
 
 outputs/
   figures/        # generated plots
@@ -56,7 +62,7 @@ docs/
   models.md       # comparison of ABM, DGE, DSGE, and hybrid model types
 
 notes/
-  todo.md         # planned extensions and future improvements
+  todo.md         # planned extensions and open questions
 ```
 
 ---
@@ -93,72 +99,55 @@ Simulation outputs are saved under `outputs/`.
 
 ## Monetary Model Summary
 
-The monetary extension splits the old labor-consumption barter relation into two money-mediated markets:
+The monetary extension replaces the barter relation with two money-mediated markets:
 
 ```text
-labor market:
-  household sells labor
-  firm buys labor
-  price = wage
-
-goods market:
-  firm sells consumption goods
-  household buys consumption goods
-  price = goods price
+labor market:   household sells labor  →  firm pays wages
+goods market:   firm sells goods       →  household pays with cash
 ```
 
-Agents can hold cash:
+Both agents hold `cash`. Cash influences decisions only after conversion to real purchasing power. The simulation step sequence is:
 
-- `HouseHold.cash`
-- `Firm.cash`
-
-Cash is not meant to influence behavior directly as a nominal value. Decision logic converts cash into real purchasing power:
-
-```python
-real_cash = cash / previous_goods_price
+```text
+1. Reset per-step accumulators
+2. Firm proposes (wage, goods price) via Nelder-Mead; computes effective productivity
+3. Household sets labor supply rate and desired consumption rate
+4. Labor settles: firm absorbs all labor supply (volume = rate × dt)
+5. Production = realized_labor × effective_productivity
+6. Goods settle: household buys min(desired × dt, production)
+7. Goods profit rate = (production − sold) / dt  →  fed to Nelder-Mead
+8. Dividend: transfer ∝ log(firm_cash / household_cash) × dt
+9. Commit prices for next-step real-balance calculations
 ```
-
-The monetary experiment currently enables:
-
-```python
-forbid_negative_cash=True
-```
-
-When this option is enabled, `MoneyMarket` caps transaction volume to what the buyer can afford, and direct overdraft transactions raise an error.
 
 ---
 
-## Current Monetary Dynamics
+## Design Notes and Cautions
 
-The current monetary experiment starts with:
+**Optimizer**: `scipy.optimize.minimize` cannot be used because it requires a synchronous callable, but each function evaluation costs one irreversible simulation step. `StepwiseNelderMead2D` in `optimizer.py` is therefore a custom stateful implementation. It implements the full standard algorithm, but Nelder-Mead was designed for static landscapes; its performance on this model's non-stationary profit landscape has not been characterized.
 
-```text
-Household cash = 5
-Firm cash = 5
-Wage = 1
-Goods price = 1
-Negative cash forbidden
-```
+**Time-scale behavior**: the rate-based design is confirmed correct — `dt` appears only at transaction sites and all recorded series are rates. The invariance property (halving `dt` and doubling steps produces an equivalent trajectory) has been inspected and confirmed by the author.
 
-The model runs, but it currently tends toward a liquidity-constrained corner: firm profits move cash from the household to the firm, the household eventually reaches the zero-cash floor, and output falls to a very low level. This is useful as a diagnostic result, not yet the desired well-balanced equilibrium example.
-
-Next work should adjust the monetary behavior rules so money circulates more naturally, for example through dividends, wage adjustment, price adjustment, or household/firm rules that produce a more stable interior equilibrium.
+**Equilibrium**: the monetary experiment runs without errors, but tends toward a liquidity-constrained corner where cash accumulates at the firm and output collapses. Dividend recycling partially counteracts this but interior equilibrium tuning has not been done.
 
 ---
 
 ## Planned Extensions
 
-See [`notes/todo.md`](notes/todo.md) and [`PROGRESS.md`](PROGRESS.md) for current status and next steps.
+See [`TODO.md`](TODO.md) and [`PROGRESS.md`](PROGRESS.md) for current status and next steps.
 
-Planned directions include:
+High-priority open questions:
 
-- Better monetary behavior rules and interior equilibria
-- Dividends or other income recycling mechanisms
-- Additional agent types such as government, central bank, financial institutions, wealthy households, and resource agents
-- More market types such as B2B, B2C, L2B, and R2B
-- Import/export flows and policy shocks
-- Animated visualization of economic flows and agent interactions
-- More documentation and usage examples
+- Tune behavioral parameters for a stable interior equilibrium
+- Evaluate NM simplex collapse over long runs on the non-stationary landscape
+
+Longer-term directions:
+
+- Additional agent types: government, central bank, financial institutions, wealthy households, resource agents
+- More market types: B2B, B2C, L2B, R2B
+- Policy shocks and comparative statics
+- Animated visualization of economic flows
+- Stochastic behavioral rules
 
 ---
 
