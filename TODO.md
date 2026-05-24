@@ -1,6 +1,6 @@
 # TODO
 
-Last updated: 2026-05-20
+Last updated: 2026-05-25
 
 ---
 
@@ -14,6 +14,8 @@ Last updated: 2026-05-20
 
 ## Near-Term
 
+- [ ] **NM shrink stopping criterion**: add a resolution threshold to `StepwiseNelderMead2D` so the shrink phase halts once the simplex diameter falls below a minimum size (e.g., `ε` on each axis). Without this, successive shrinks in a dynamical system collapse the simplex to a degenerate point and the optimizer stops exploring entirely.
+- [ ] **NM shrink-to-extend transition**: during a shrink sequence, loop over the existing (already-evaluated) vertices and check whether any updated objective value suggests outward movement is warranted. If the best observed direction is extending rather than contracting, exit the shrink phase early. This prevents sporadic behavior where the optimizer keeps contracting while the landscape has shifted outward.
 - [ ] **NM reset heuristic**: add an optional periodic simplex reinitialization to `StepwiseNelderMead2D` (e.g., reset every N steps around the current best vertex) to prevent collapse on non-stationary landscapes.
 - [ ] **NM alternatives**: consider replacing Nelder-Mead with a finite-difference gradient estimate with exponential forgetting, which adapts more naturally to shifting objectives.
 - [ ] **Dividend sensitivity analysis**: sweep `dividend_rate` and observe its effect on cash distribution and output level.

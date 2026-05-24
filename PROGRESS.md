@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-05-20
+Last updated: 2026-05-25
 
 ## Summary
 
@@ -43,7 +43,11 @@ The firm's pricing optimizer was a bespoke, incomplete Nelder-Mead state machine
 
 **`MonetaryFirmLogic` after extraction**: ~35 lines, zero NM internals. The firm lazily constructs a `StepwiseNelderMead2D` on the first `update_prices()` call (seeded from current market prices), then delegates each step to `nm.advance()`.
 
-**Known limitation**: Nelder-Mead stores profit values from past evaluations. In this model the profit landscape shifts each step as cash balances change. The simplex may collapse or track a stale optimum over long runs. A periodic reset heuristic or a different optimizer may be needed.
+**Known limitations**:
+
+- *Stale landscape*: Nelder-Mead stores profit values from past evaluations. In this model the profit landscape shifts each step as cash balances change. The simplex may collapse or track a stale optimum over long runs. A periodic reset heuristic or a different optimizer may be needed.
+- *Shrink termination*: in a dynamical system the shrink phase lacks a resolution-based stopping criterion. Without one, repeated shrinks collapse the simplex to a near-degenerate point and the optimizer freezes. A minimum diameter threshold (`ε` per axis) is needed to halt shrinking before the simplex becomes degenerate.
+- *Shrink-to-extend transition*: during a shrink sequence the algorithm does not re-examine whether extending would be more appropriate given the current landscape. The correct behavior is to loop over the existing (already-evaluated) vertices, observe any changes in their objective values, and exit the shrink phase early if the evidence points outward (extending) rather than inward (contracting). Skipping this check causes sporadic contraction that ignores outward-pointing information already present in the simplex.
 
 ### Test Suite Update
 
