@@ -8,7 +8,7 @@ The project currently contains two working example economies:
 - `experiments/barter_economy.py`: the original moneyless baseline, where one household and one firm barter labor for consumption goods.
 - `experiments/monetary_economy.py`: a monetary extension, where labor and goods trade through money, agents hold cash, firm productivity depends on real liquidity, and profits are recycled to the household via dividend transfers.
 
-This is an early-stage research sandbox. The monetary model is structurally complete but its behavioral dynamics have not yet been tuned to produce a stable interior equilibrium, and several properties remain unconfirmed by the author.
+This is an early-stage research sandbox. The default monetary example now follows a smooth interior trajectory and passes time-step refinement checks, but it is not yet a calibrated macroeconomic model.
 
 ---
 
@@ -20,13 +20,14 @@ This is an early-stage research sandbox. The monetary model is structurally comp
 - Monetary market settlement through cash payments
 - Optional nonnegative-cash constraint at the agent level
 - Behavioral logic separated from agent state
-- Real-balance calculations: cash influences decisions only after conversion to goods-equivalent purchasing power (`real_cash = cash / previous_goods_price`)
-- Firm joint wage/price optimization via full Nelder-Mead (reflect, expand, outside contract, inside contract, shrink) in a stateful one-evaluation-per-step design
+- Real-balance calculations: beginning-of-step cash is valued at the candidate current goods price (`real_cash = cash / goods_price`)
+- Instantaneous firm wage/price optimization against a frozen economic state: constrained initialization plus first-order tracking of the expected-clearing optimum
+- Compatible `StepwiseNelderMead2D` with floor/age restarts for genuinely sequential objectives
 - Liquidity-dependent firm productivity (saturating function of real cash)
 - Log-ratio dividend recycling from firm to household
 - Rate-based time integration: all logic sets rates; `dt` appears only at transaction sites
 - CSV output and matplotlib visualization
-- Standard-library test suite (57 tests) under `tests/`
+- Standard-library test suite (75 tests) under `tests/`
 
 ---
 
@@ -110,12 +111,12 @@ Both agents hold `cash`. Cash influences decisions only after conversion to real
 
 ```text
 1. Reset per-step accumulators
-2. Firm proposes (wage, goods price) via Nelder-Mead; computes effective productivity
+2. Firm maximizes expected real profit, assuming desired consumption equals production
 3. Household sets labor supply rate and desired consumption rate
 4. Labor settles: firm absorbs all labor supply (volume = rate × dt)
 5. Production = realized_labor × effective_productivity
 6. Goods settle: household buys min(desired × dt, production)
-7. Goods profit rate = (production − sold) / dt  →  fed to Nelder-Mead
+7. Record real and nominal operating profit; retain production − sold as an ex-post imbalance
 8. Dividend: transfer ∝ log(firm_cash / household_cash) × dt
 9. Commit prices for next-step real-balance calculations
 ```
@@ -124,11 +125,13 @@ Both agents hold `cash`. Cash influences decisions only after conversion to real
 
 ## Design Notes and Cautions
 
-**Optimizer**: `scipy.optimize.minimize` cannot be used because it requires a synchronous callable, but each function evaluation costs one irreversible simulation step. `StepwiseNelderMead2D` in `optimizer.py` is therefore a custom stateful implementation. It implements the full standard algorithm, but Nelder-Mead was designed for static landscapes; its performance on this model's non-stationary profit landscape has not been characterized.
+**Firm objective and optimizer**: at a candidate wage `w` and goods price `p`, the firm assumes its production is sold and maximizes expected real operating profit `production − (w/p) × labor`, subject to expected household consumption equalling production. Cash settlement is not an objective or self-financing constraint. Candidate evaluations are side-effect free and do not advance time. The first frozen-state problem is solved with constrained SLSQP; subsequent steps track market clearing and the constrained first-order condition from the previous optimum. The former one-evaluation-per-step Nelder-Mead implementation remains available through `price_optimization_mode = 'stepwise'`, including its floor, vertex-age, and proposal-step safeguards.
 
-**Time-scale behavior**: the rate-based design is confirmed correct — `dt` appears only at transaction sites and all recorded series are rates. The invariance property (halving `dt` and doubling steps produces an equivalent trajectory) has been inspected and confirmed by the author.
+**Time-scale behavior**: `dt` appears only at transaction sites and all recorded series are rates. Refinement at `dt = 0.002`, `0.001`, `0.0005`, and `0.00025` shows decreasing errors against the finest trajectory. Solver evaluations no longer count as elapsed economic time.
 
-**Equilibrium**: the monetary experiment runs without errors, but tends toward a liquidity-constrained corner where cash accumulates at the firm and output collapses. Dividend recycling partially counteracts this but interior equilibrium tuning has not been done.
+**Dynamic-system qualification**: the monetary model is best described as a differential-algebraic, piecewise-smooth system: cash stocks are Euler-integrated differential states, while optimal prices and behavioral rates are algebraic functions of the current state. The default interior branch is continuous. Hard affordability caps and configured price bounds can still create boundary regimes for extreme states.
+
+**Current result**: over 50 periods, all 50,000 price solves converge. Expected consumption and production differ by at most `6.8e-13`; the ex-post goods imbalance is below `3.5e-15`; cash conservation and the real-profit identity hold to machine precision. Both cash balances remain positive and all displayed trajectories are smooth. The firm accumulates most cash, so behavioral calibration and distributional realism remain open questions.
 
 ---
 
@@ -138,8 +141,8 @@ See [`TODO.md`](TODO.md) and [`PROGRESS.md`](PROGRESS.md) for current status and
 
 High-priority open questions:
 
-- Tune behavioral parameters for a stable interior equilibrium
-- Evaluate NM simplex collapse over long runs on the non-stationary landscape
+- Calibrate household, dividend, and liquidity parameters
+- Analyze price-floor and affordability regimes under extreme cash distributions
 
 Longer-term directions:
 

@@ -1,25 +1,25 @@
 # TODO
 
-Last updated: 2026-05-25
+Last updated: 2026-09-01
 
 ---
 
 ## Immediate — Inspect and Tune
 
-- [ ] **Interior equilibrium tuning**: adjust `propensity_income`, `propensity_wealth`, `target_real_cash`, `dividend_rate`, and the liquidity factor bounds so the economy sustains a stable interior equilibrium rather than collapsing to the zero-cash corner.
-- [ ] **NM simplex collapse**: after a long run (total_time ≥ 200), inspect whether the simplex diameter collapses to near zero. If so, prices freeze and the optimizer has stopped exploring.
-- [ ] **Inspect full-NM effect**: compare the pricing trajectory to the previous reflect-contract-only version. Does expand/shrink improve stability or introduce more oscillation?
+- [ ] **Economic calibration**: adjust `propensity_income`, `propensity_wealth`, `target_real_cash`, `dividend_rate`, and liquidity parameters against explicit calibration targets. The current default is numerically stable but leaves most cash at the firm.
+- [ ] **Firm shutdown/labor demand**: add an explicit choice not to hire all offered labor for cases where the affordability fallback becomes active.
+- [ ] **Boundary-regime analysis**: map the cash/parameter region over which the expected-clearing price solution is interior and locally unique rather than lying on the configured price floor.
 
 ---
 
 ## Near-Term
 
-- [ ] **NM shrink stopping criterion**: add a resolution threshold to `StepwiseNelderMead2D` so the shrink phase halts once the simplex diameter falls below a minimum size (e.g., `ε` on each axis). Without this, successive shrinks in a dynamical system collapse the simplex to a degenerate point and the optimizer stops exploring entirely.
+- [x] **NM shrink stopping criterion**: optional simplex-floor restarts now prevent permanent collapse in `StepwiseNelderMead2D`.
 - [ ] **NM shrink-to-extend transition**: during a shrink sequence, loop over the existing (already-evaluated) vertices and check whether any updated objective value suggests outward movement is warranted. If the best observed direction is extending rather than contracting, exit the shrink phase early. This prevents sporadic behavior where the optimizer keeps contracting while the landscape has shifted outward.
-- [ ] **NM reset heuristic**: add an optional periodic simplex reinitialization to `StepwiseNelderMead2D` (e.g., reset every N steps around the current best vertex) to prevent collapse on non-stationary landscapes.
-- [ ] **NM alternatives**: consider replacing Nelder-Mead with a finite-difference gradient estimate with exponential forgetting, which adapts more naturally to shifting objectives.
+- [x] **NM reset heuristic**: floor and vertex-age triggers rebuild a rotated regular simplex and discard stale scores.
+- [x] **Separate solver time from economic time**: the default monetary price problem is solved against a frozen state, with constrained initialization and first-order tracking. The sequential Nelder-Mead tracker remains an optional compatibility mode.
 - [ ] **Dividend sensitivity analysis**: sweep `dividend_rate` and observe its effect on cash distribution and output level.
-- [ ] **Remove `list_labor_supply` / `list_labor` redundancy**: both currently record `labor_market.supply_volume`. Differentiate once rationing is reintroduced, or drop one column.
+- [x] **Differentiate labor supply and matched labor output**: `Labor_Supply` records the offered rate while `Labor` records realized firm labor per unit time.
 
 ---
 

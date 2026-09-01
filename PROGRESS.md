@@ -1,16 +1,55 @@
 # Progress
 
-Last updated: 2026-05-25
+Last updated: 2026-09-01
 
 ## Summary
 
 The project has moved from a barter-only proof of concept to a backward-compatible framework with both barter and monetary experiments.
 
-The barter experiment remains available as the baseline. The monetary experiment has gone through two major implementation phases. The model is structurally sound, but has not yet been tuned to produce a well-balanced interior equilibrium, and several behavioral properties remain unconfirmed by the author.
+The barter experiment remains available as the baseline. The monetary experiment now uses a frozen-state instantaneous price solve and follows a smooth positive-cash interior trajectory. It is numerically consistent under time-step refinement but remains an uncalibrated research model.
+
+---
+
+## 2026-09-01
+
+### Correct Expected-Clearing Firm Problem
+
+The firm problem was clarified after separating its ex-ante decision from ex-post settlement:
+
+- The firm assumes expected goods-market clearing, `desired consumption = production`.
+- It maximizes real operating profit in goods, `production − (wage / goods price) × labor`.
+- `production − realized consumption` is an ex-post goods imbalance, not profit.
+- Nominal sales minus the wage bill changes firm cash after the decision. It is neither the objective nor a self-financing constraint.
+
+Implemented changes:
+
+- Candidate outcomes are evaluated against a frozen state with no settlement side effects or elapsed economic time.
+- The first expected-clearing maximum is solved in log prices with constrained SLSQP. Later steps solve market clearing plus the constrained real-profit first-order condition from the previous optimum.
+- Beginning-of-step cash is valued at the candidate current goods price for household real balances and the retained liquidity-productivity channel. This affects the economic state equations but does not create a cash-flow feasibility constraint.
+- `Firm.step_real_profit` and `Firm.step_goods_imbalance` now distinguish the two real quantities. `step_profit_goods` and `Firm_Profit_Goods` remain deprecated compatibility aliases for the imbalance.
+- The experiment records offered and actually matched labor separately and compares predicted real profit with the realized real operating-profit rate.
+- The prior `StepwiseNelderMead2D` path remains available through `price_optimization_mode = 'stepwise'`, including floor/age restarts and the small 0.1% initial probes.
+
+Validation of `outputs/data/monetary_economy_20260901_075516.csv`:
+
+- All 50,000 frozen-state solves converged; the first used `expected_clearing_slsqp`, and 49,999 used `expected_clearing_foc` tracking.
+- Maximum expected-consumption/production gap: `6.79e-13`.
+- Maximum ex-post goods imbalance: `3.47e-15`.
+- Maximum predicted-versus-realized real-profit error: `6.66e-16`.
+- Cash conservation error: `1.72e-13`; production-identity error: `4.44e-16`.
+- Largest recorded one-step changes were `1.88e-5` for wage, `6.53e-5` for goods price, and `1.17e-5` for real wage, all near the first step rather than as mid-run jumps.
+- Household cash remained at least `1.4445`; firm cash remained at least `5.0006`; the affordability fallback did not activate.
+- The focused time-refinement test converges, and 21 tested cash/initial-price combinations all returned clearing solutions. Nearly cashless-household cases can select the configured price floor and are boundary rather than interior solutions.
+
+### Dynamic-System Qualification
+
+The monetary model is a piecewise-smooth differential-algebraic system. Cash balances are differential states integrated through `rate × dt`; expected-clearing prices and behavioral rates are algebraic functions of the current state. The default path remains on a regular algebraic branch and is smooth. Affordability, `min`/`max`, and configured price bounds still define possible boundary regimes.
 
 ---
 
 ## 2026-05-20
+
+*Historical implementation record. The sequential monetary pricing path described below was superseded by the frozen-state hybrid solver on 2026-09-01; `StepwiseNelderMead2D` remains available as a compatibility mode.*
 
 ### Time-Unit Cleanup
 
@@ -40,18 +79,26 @@ The firm's pricing optimizer was a bespoke, incomplete Nelder-Mead state machine
 - Implemented operations: reflect, expand (γ=2), outside contraction (β=0.5), inside contraction (β=0.5), two-step shrink (δ=0.5).
 - Old implementation had only reflect and inside contraction (called "contract"); expand and shrink were missing.
 - Lower bounds enforced by clamping at every proposal site.
+- Optional dynamic tracking mode records each vertex's evaluation age. A minimum simplex radius or maximum vertex age triggers a rotated regular-simplex restart around the latest operating point and discards all stale scores.
+- Optional log coordinates make the restart radius proportional for positive variables. Classical linear-coordinate behavior remains the default for compatibility.
 
 **`MonetaryFirmLogic` after extraction**: ~35 lines, zero NM internals. The firm lazily constructs a `StepwiseNelderMead2D` on the first `update_prices()` call (seeded from current market prices), then delegates each step to `nm.advance()`.
 
-**Known limitations**:
+**Dynamic tracking configuration**:
 
-- *Stale landscape*: Nelder-Mead stores profit values from past evaluations. In this model the profit landscape shifts each step as cash balances change. The simplex may collapse or track a stale optimum over long runs. A periodic reset heuristic or a different optimizer may be needed.
-- *Shrink termination*: in a dynamical system the shrink phase lacks a resolution-based stopping criterion. Without one, repeated shrinks collapse the simplex to a near-degenerate point and the optimizer freezes. A minimum diameter threshold (`ε` per axis) is needed to halt shrinking before the simplex becomes degenerate.
+- `MonetaryFirmLogic` uses log-coordinate geometry with `nm_min_log_size = 3e-5` (approximately 0.003%) and `nm_max_vertex_age = 20`. A full-horizon parameter sweep showed that the original 0.02 trial floor dominated the `dt=0.001` dynamics and drove goods profit to zero; `3e-5` retained persistent exploration while closely matching the stable pre-restart trajectory.
+- A floor restart prevents permanent refinement below the useful exploration scale; an age restart prevents an old observation from remaining the incumbent indefinitely.
+- After the initial coarse search, `nm_max_log_step = 1e-3` caps each tracking proposal at approximately 0.1% log-distance from the just-evaluated point. This removed a late expansion burst without disabling exploration.
+- Monetary experiment CSVs record restart counts, events, reasons, simplex size, and oldest vertex age for diagnostics.
+- The optimizer remains a heuristic tracker of a path-dependent landscape, not a static-equilibrium solver. The floor and age parameters still require sensitivity analysis.
+
+**Known limitation**:
+
 - *Shrink-to-extend transition*: during a shrink sequence the algorithm does not re-examine whether extending would be more appropriate given the current landscape. The correct behavior is to loop over the existing (already-evaluated) vertices, observe any changes in their objective values, and exit the shrink phase early if the evidence points outward (extending) rather than inward (contracting). Skipping this check causes sporadic contraction that ignores outward-pointing information already present in the simplex.
 
 ### Test Suite Update
 
-Added `tests/test_optimizer.py` (31 tests) covering:
+Added `tests/test_optimizer.py` (39 tests) covering:
 
 - Initialisation: seed proposals, reflect-phase transition.
 - All four reflect-branch decisions: accept, expand, outside contract, inside contract.
@@ -60,13 +107,16 @@ Added `tests/test_optimizer.py` (31 tests) covering:
 - Inside contraction: accepted when better than worst; rejected triggers shrink.
 - Shrink: two-step sequence (shrink vertex 1, then vertex 2), both applied on completion.
 - Lower bound enforcement over 60 steps.
+- Dynamic tracking: opt-in compatibility, log-coordinate conversion, floor restarts, stale-score removal, maximum vertex age, and tracking-step limits.
 - Convergence to the maximum of a known 2D quadratic (places=1 within 500 evaluations).
 
-Total tests: **57** (was 26 before this session).
+Total tests: **66** (was 26 before this session).
 
 ---
 
 ## 2026-05-19
+
+*Historical design record. The goods-residual objective and one-evaluation-per-step monetary default described below were superseded on 2026-09-01.*
 
 Redesigned the monetary economy model and wrote full documentation in `experiments/monetary_economy.md`. No code was changed; all decisions were documented first for later implementation.
 
@@ -157,7 +207,7 @@ The simulation is parameterized by `dt` (economic periods per step) and `total_t
 
 ### Tests
 
-57 tests across four files using the standard `unittest` library.
+66 tests across four files using the standard `unittest` library.
 
 ```bash
 python -m unittest discover -v

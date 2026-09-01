@@ -83,7 +83,9 @@ class Firm(Agent):
 		self.step_wage_bill = 0
 		self.step_sales_revenue = 0
 		self.step_profit = 0
-		self.step_profit_goods = 0
+		self.step_real_profit = 0
+		self.step_goods_imbalance = 0
+		self.step_profit_goods = 0  # deprecated alias for goods imbalance
 		self.step_effective_productivity = None
 		self.step_labor_demand = 0
 
@@ -96,7 +98,9 @@ class Firm(Agent):
 		self.step_wage_bill = 0
 		self.step_sales_revenue = 0
 		self.step_profit = 0
-		self.step_profit_goods = 0
+		self.step_real_profit = 0
+		self.step_goods_imbalance = 0
+		self.step_profit_goods = 0  # deprecated alias for goods imbalance
 		self.step_effective_productivity = None
 		self.step_labor_demand = 0
 

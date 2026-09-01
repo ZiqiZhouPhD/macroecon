@@ -12,11 +12,13 @@ All within-step accumulators are zeroed out — wage income, consumption spendin
 
 The firm acts; the household has no price logic. The firm:
 
-- Sets wage and goods price jointly using **Nelder-Mead** over the 2D space (wage, goods price). Each round, the firm records the (wage, price) pair it used and the resulting profit, and uses these observations to drive the simplex search — despite the economy being dynamic across rounds.
-  - **Initialization (steps 0–2)**: the simplex is seeded with three moderately separated points: `(wage_init, price_init)`, `(wage_init * 1.2, price_init)`, `(wage_init, price_init * 1.2)`, evaluated on successive steps before the search begins. `wage_init` and `price_init` are set in the experiment and passed to the firm constructor.
-  - **From step 3 onward**: standard Nelder-Mead iterations — reflect, expand, contract, or shrink the simplex based on observed profits.
-  - Nelder-Mead may be implemented via an available package (e.g. `scipy.optimize.minimize` with `method='Nelder-Mead'`), managing the simplex state manually across steps rather than running to convergence in a single call.
-- Computes **effective productivity**: baseline productivity scaled by a liquidity factor using the firm's cash balance at the end of the *previous* step — more firm cash → higher productivity (up to 1.25×), less cash → lower (down to 0.5×). This models financial frictions.
+- Solves wage and goods price jointly against a **frozen beginning-of-step state**. Candidate evaluations are side-effect free and do not advance economic time.
+  - It assumes expected goods-market clearing: `desired consumption = production`.
+  - It maximizes **expected real operating profit**: `production − (wage / goods price) × labor`.
+  - The first solve uses constrained SLSQP in log-price coordinates. Later steps solve market clearing and the constrained-profit first-order condition directly, using the previous optimum as the starting point.
+  - The old one-evaluation-per-step tracker is still available as `price_optimization_mode = 'stepwise'`, but is not the monetary default.
+- Does not impose a nominal self-financing constraint. Cash records the settlement that occurs after the pricing decision.
+- Computes **effective productivity** from the firm's beginning-of-step cash valued at the candidate current goods price — more real firm cash raises productivity up to 1.25× baseline; less lowers it toward 0.5×.
 
 ### 3. Volumes Update
 
@@ -25,7 +27,7 @@ The household reacts to the prices set in step 2. The firm does nothing in this 
 - **Household** computes:
   - Real wage = nominal wage / goods price
   - **Labor supply**: determined first, via real-wage elasticity — higher real wage → more labor offered. This is the household's primary decision given the prices set in step 2.
-  - **Desired consumption**: follows from the labor supply decision. Real income is computed from the chosen labor supply (wage × labor / goods price), and desired consumption is a weighted sum of that real income and a savings purchasing power adjustment. If the household's real cash holdings exceed its target, it spends more; if below, it cuts back. Desired consumption is capped so that the household cannot overspend into negative cash.
+  - **Desired consumption**: follows from the labor supply decision. Real income is computed from the chosen labor supply (wage × labor / goods price), and desired consumption is a weighted sum of that real income and a savings purchasing power adjustment. Beginning-of-step cash is divided by the candidate current goods price, not the previous price. Market settlement enforces the nonnegative-cash constraint.
 
 ### 4. Labor Market Clears and Production
 
@@ -36,17 +38,17 @@ The household reacts to the prices set in step 2. The firm does nothing in this 
 ### 5. Goods Market Clears
 
 - The household purchases its desired consumption volume (set in step 3), paying `goods_price × consumption`. Both cash balances update.
-- **Profit** is the residual in real goods: `profit = production − consumption` (physical units). It exits the economy — there is no inventory. The firm's objective (targeted by Nelder-Mead in step 2) is to maximize this quantity.
-- Profit is interpreted as being consumed by the firm's owner outside the model, or reinvested into the firm to sustain productivity — but this model does not track either effect explicitly.
+- **Real operating profit** is `production − (wage / goods price) × labor`, matching the firm's expected-clearing objective.
+- **Nominal operating profit** is realized sales revenue minus the wage bill; it changes firm cash before dividends.
+- `production − realized consumption` is an ex-post goods imbalance, not profit. There is no inventory, so any nonzero residual exits the modeled goods flow.
 
 ### 6. Commit Prices
 
-- `previous_price ← current price` for both markets.
-- This is what both agents use in the next step to convert nominal cash to real values (e.g., real cash = `cash / previous_goods_price`).
+- `previous_price ← current price` for both markets for historical bookkeeping. Current decisions use the current candidate price.
 
 ## Key Asymmetry
 
-The labor market does not ration — the firm absorbs all labor the household offers. The goods market is demand-determined — the household buys its desired consumption volume and the firm produces whatever that labor yields. The gap between production and consumption is profit, which exits the economy.
+The labor market does not ration while the firm remains solvent — the firm absorbs all labor the household offers. The money market's affordability rule is a hard fallback at the cash boundary. The goods market settles the short side of desired consumption and production. On the default optimum branch these rates are equal to numerical precision.
 
 ## Notes
 
@@ -55,3 +57,5 @@ The labor market does not ration — the firm absorbs all labor the household of
 **Household consumption demand**: The household's desired consumption is sensitive to the purchasing power of its savings. When the household holds more real cash than its target, it spends more; when its real cash falls below target, it cuts back. This makes consumption demand a function of both current income and the real value of accumulated savings.
 
 **Firm cash drain**: To prevent the firm from accumulating cash indefinitely (which would saturate the liquidity-productivity factor), a dividend transfer is made each step from the firm to the household at a rate proportional to `log(firm_cash / household_cash)`. This is justified by two symmetric real-world pressures: when the household holds excess cash relative to the firm, it tends to invest that savings into the firm (capital flow inward); when the firm holds excess cash relative to the household, its owners withdraw dividends or distribute profits back to themselves as households (capital flow outward). The log ratio captures this pressure continuously and symmetrically, reversing direction depending on which side holds the relative surplus.
+
+**System class and continuity**: cash balances are differential states integrated as `rate × dt`; prices and behavioral rates are algebraic solutions at the current state. The model is therefore a piecewise-smooth differential-algebraic system, not a single unconstrained smooth ODE. On the default positive-cash interior branch the expected-clearing solution is continuous and time-step refinement converges. `min`/`max`, affordability, and configured price bounds remain nondifferentiable at regime boundaries.

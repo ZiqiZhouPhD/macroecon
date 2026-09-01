@@ -1,3 +1,4 @@
+import math
 import unittest
 
 from macroABM.optimizer import StepwiseNelderMead2D
@@ -299,6 +300,117 @@ class LowerBoundTests(unittest.TestCase):
 		pt = nm.advance(None)
 		self.assertAlmostEqual(pt[0], 0.5)
 		self.assertAlmostEqual(pt[1], 0.5)
+
+
+# ---------------------------------------------------------------------------
+# Dynamic-objective tracking safeguards
+# ---------------------------------------------------------------------------
+
+class TrackingTests(unittest.TestCase):
+	def test_tracking_is_disabled_by_default(self):
+		nm = _make_nm()
+		self.assertFalse(nm.tracking_enabled)
+		self.assertEqual(nm.restart_count, 0)
+
+	def test_vertex_age_requires_a_restart_size(self):
+		with self.assertRaises(ValueError):
+			StepwiseNelderMead2D(seeds=SEEDS, max_vertex_age=20)
+
+	def test_max_proposal_step_cannot_be_smaller_than_floor(self):
+		with self.assertRaises(ValueError):
+			StepwiseNelderMead2D(
+				seeds=SEEDS,
+				min_simplex_size=0.1,
+				max_proposal_step=0.05,
+			)
+
+	def test_log_coordinates_require_positive_inputs(self):
+		with self.assertRaises(ValueError):
+			StepwiseNelderMead2D(
+				seeds=SEEDS,
+				lower_bounds=(0.0, 0.1),
+				use_log_coordinates=True,
+			)
+
+	def test_log_coordinates_preserve_external_seed_and_best_values(self):
+		nm = StepwiseNelderMead2D(
+			seeds=SEEDS,
+			lower_bounds=(0.1, 0.1),
+			use_log_coordinates=True,
+		)
+		pt = nm.advance(None)
+		self.assertAlmostEqual(pt[0], 1.0)
+		self.assertAlmostEqual(pt[1], 1.0)
+		nm.advance(10)
+		nm.advance(5)
+		nm.advance(1)
+		self.assertAlmostEqual(nm.best[0], 1.0)
+		self.assertAlmostEqual(nm.best[1], 1.0)
+		self.assertEqual(nm.best[2], 10)
+
+	def test_floor_restart_discards_scores_and_reseeds_at_floor(self):
+		nm = StepwiseNelderMead2D(
+			seeds=SEEDS,
+			lower_bounds=(0.0, 0.0),
+			min_simplex_size=0.4,
+		)
+		pt = nm.advance(None)
+		for _ in range(20):
+			pt = nm.advance(0)
+			if nm.restart_count:
+				break
+
+		self.assertEqual(nm.restart_count, 1)
+		self.assertEqual(nm.last_restart_reason, 'simplex_floor')
+		self.assertEqual(nm._action, 'init')
+		self.assertEqual(nm._vertices, [])
+		self.assertIsNone(nm.best)
+
+		cx = sum(seed[0] for seed in nm._seeds) / 3
+		cy = sum(seed[1] for seed in nm._seeds) / 3
+		for seed in nm._seeds:
+			self.assertAlmostEqual(
+				math.hypot(seed[0] - cx, seed[1] - cy),
+				0.4,
+			)
+
+	def test_old_vertex_triggers_fresh_simplex(self):
+		nm = StepwiseNelderMead2D(
+			seeds=SEEDS,
+			lower_bounds=(0.0, 0.0),
+			min_simplex_size=1e-6,
+			max_vertex_age=3,
+		)
+		_run_init(nm, values=(10, 5, 1))
+		nm.advance(7)
+
+		self.assertEqual(nm.restart_count, 1)
+		self.assertEqual(nm.last_restart_reason, 'vertex_age')
+		self.assertEqual(nm._vertices, [])
+		self.assertIsNone(nm.oldest_vertex_age)
+
+	def test_tracking_proposals_respect_maximum_step_after_restart(self):
+		nm = StepwiseNelderMead2D(
+			seeds=SEEDS,
+			lower_bounds=(0.0, 0.0),
+			min_simplex_size=0.1,
+			max_vertex_age=5,
+			max_proposal_step=0.15,
+		)
+		point = nm.advance(None)
+		previous = point
+		restarted = False
+		for idx in range(100):
+			point = nm.advance(float(idx % 7))
+			if nm.restart_count:
+				restarted = True
+				distance = math.hypot(
+					point[0] - previous[0],
+					point[1] - previous[1],
+				)
+				self.assertLessEqual(distance, 0.15 + 1e-12)
+			previous = point
+		self.assertTrue(restarted)
 
 
 # ---------------------------------------------------------------------------

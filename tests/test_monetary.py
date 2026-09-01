@@ -43,6 +43,10 @@ def make_monetary_economy(
 	return household, firm, labor_market, goods_market
 
 
+def enable_stepwise_pricing(firm):
+	firm.logic.price_optimization_mode = 'stepwise'
+
+
 class MoneyMarketTests(unittest.TestCase):
 	def test_money_market_settlement_updates_goods_and_cash(self):
 		household, firm, _, goods_market = make_monetary_economy()
@@ -148,6 +152,29 @@ class MonetaryBehaviorTests(unittest.TestCase):
 			low_cash_goods.demand_volume,
 		)
 
+	def test_household_values_cash_at_current_goods_price(self):
+		current_price_changed, _, changed_labor, changed_goods = make_monetary_economy(
+			household_cash=10,
+			goods_price=1,
+		)
+		equivalent_real_cash, _, baseline_labor, baseline_goods = make_monetary_economy(
+			household_cash=5,
+			goods_price=1,
+		)
+		# Preserve the same real wage while changing only this step's price and
+		# leaving previous_price at its old value.
+		changed_labor.price = 2
+		changed_goods.price = 2
+
+		current_price_changed.update_volumes()
+		equivalent_real_cash.update_volumes()
+
+		self.assertAlmostEqual(
+			changed_goods.demand_volume,
+			baseline_goods.demand_volume,
+			places=12,
+		)
+
 	def test_higher_real_wage_raises_household_labor_supply(self):
 		household, _, labor_market, goods_market = make_monetary_economy()
 		goods_market.price = 1
@@ -170,7 +197,9 @@ class MonetaryBehaviorTests(unittest.TestCase):
 			goods_price=2,
 		)
 
-		# Effective productivity is computed in update_prices().
+		enable_stepwise_pricing(low_nominal_firm)
+		enable_stepwise_pricing(high_nominal_same_real_firm)
+		# Effective productivity is computed at the proposed current price.
 		low_nominal_firm.update_prices()
 		high_nominal_same_real_firm.update_prices()
 
@@ -190,6 +219,8 @@ class MonetaryBehaviorTests(unittest.TestCase):
 			goods_price=1,
 		)
 
+		enable_stepwise_pricing(low_cash_firm)
+		enable_stepwise_pricing(high_cash_firm)
 		low_cash_firm.update_prices()
 		high_cash_firm.update_prices()
 
@@ -198,8 +229,32 @@ class MonetaryBehaviorTests(unittest.TestCase):
 			low_cash_firm.logic.effective_productivity,
 		)
 
+	def test_firm_values_cash_at_candidate_current_goods_price(self):
+		_, current_price_changed, changed_labor, changed_goods = make_monetary_economy(
+			firm_cash=10,
+			goods_price=1,
+		)
+		_, equivalent_real_cash, _, _ = make_monetary_economy(
+			firm_cash=5,
+			goods_price=1,
+		)
+		changed_labor.price = 2
+		changed_goods.price = 2
+		enable_stepwise_pricing(current_price_changed)
+		enable_stepwise_pricing(equivalent_real_cash)
+
+		current_price_changed.update_prices()
+		equivalent_real_cash.update_prices()
+
+		self.assertAlmostEqual(
+			current_price_changed.logic.effective_productivity,
+			equivalent_real_cash.logic.effective_productivity,
+			places=12,
+		)
+
 	def test_productivity_liquidity_effect_is_bounded(self):
 		_, firm, _, _ = make_monetary_economy(firm_cash=10_000)
+		enable_stepwise_pricing(firm)
 
 		firm.update_prices()
 
@@ -214,10 +269,109 @@ class MonetaryBehaviorTests(unittest.TestCase):
 		self.assertTrue(math.isfinite(firm.logic.effective_productivity))
 
 
-class NelderMeadPricingTests(unittest.TestCase):
-	def test_nm_uses_seed_prices_for_first_three_steps(self):
+class FirmPricingTests(unittest.TestCase):
+	def test_instantaneous_frozen_state_solve_is_the_default(self):
 		_, firm, labor_market, goods_market = make_monetary_economy()
+		initial_cash = firm.cash
+		firm.update_prices()
+
+		self.assertEqual(firm.logic.price_optimization_mode, 'instantaneous')
+		self.assertIsNone(firm.logic._nm)
+		self.assertTrue(firm.logic.nm_last_converged)
+		self.assertGreater(firm.logic.nm_last_evaluations, 3)
+		self.assertEqual(firm.cash, initial_cash)
+		self.assertGreater(labor_market.price, 0)
+		self.assertGreater(goods_market.price, 0)
+
+	def test_firm_maximizes_expected_real_profit_under_clearing(self):
+		household, firm, labor_market, goods_market = make_monetary_economy(
+			household_cash=2.9809704670852475,
+			firm_cash=7.019029532914724,
+			goods_price=0.237348,
+		)
+		labor_market.price = 0.052028
+		household.logic.real_wage_0 = 1
+		firm.update_prices()
+
+		self.assertTrue(firm.logic.nm_last_converged)
+		outcome = firm.logic._evaluate_candidate(
+			labor_market.price,
+			goods_market.price,
+		)
+		real_wage = labor_market.price / goods_market.price
+		self.assertAlmostEqual(outcome[1], outcome[2], places=7)
+		self.assertAlmostEqual(
+			firm.logic.nm_last_predicted_profit,
+			outcome[2] - real_wage * outcome[0],
+			places=12,
+		)
+		self.assertAlmostEqual(
+			outcome[5] / goods_market.price,
+			firm.logic.nm_last_predicted_profit,
+			places=7,
+		)
+
+	def test_expected_real_profit_does_not_subtract_realized_demand(self):
+		_, low_demand_firm, _, _ = make_monetary_economy(
+			household_cash=1,
+			firm_cash=5,
+		)
+		_, high_demand_firm, _, _ = make_monetary_economy(
+			household_cash=9,
+			firm_cash=5,
+		)
+		low_demand_firm.logic._initialize_household_real_wage_reference()
+		high_demand_firm.logic._initialize_household_real_wage_reference()
+
+		low_outcome = low_demand_firm.logic._evaluate_candidate(0.5, 1)
+		high_outcome = high_demand_firm.logic._evaluate_candidate(0.5, 1)
+
+		self.assertNotAlmostEqual(low_outcome[3], high_outcome[3])
+		self.assertAlmostEqual(low_outcome[4], high_outcome[4], places=12)
+
+	def test_followup_solve_tracks_real_profit_optimum_without_price_jump(self):
+		_, firm, labor_market, goods_market = make_monetary_economy()
+		firm.update_prices()
+		first_prices = labor_market.price, goods_market.price
+
+		firm.update_prices()
+
+		self.assertEqual(
+			firm.logic.price_solver_last_method,
+			'expected_clearing_foc',
+		)
+		self.assertAlmostEqual(labor_market.price, first_prices[0], places=8)
+		self.assertAlmostEqual(goods_market.price, first_prices[1], places=8)
+
+	def test_low_household_cash_still_has_finite_real_profit_optimum(self):
+		_, firm, labor_market, goods_market = make_monetary_economy(
+			household_cash=0.01,
+			firm_cash=9.99,
+		)
+
+		firm.update_prices()
+
+		self.assertTrue(firm.logic.nm_last_converged)
+		self.assertTrue(math.isfinite(labor_market.price))
+		self.assertTrue(math.isfinite(goods_market.price))
+		self.assertGreater(firm.logic.nm_last_predicted_profit, 0)
+
+	def test_stepwise_compatibility_mode_enables_tracking_safeguards(self):
+		_, firm, _, _ = make_monetary_economy()
+		enable_stepwise_pricing(firm)
+		firm.update_prices()
+		self.assertTrue(firm.logic._nm.tracking_enabled)
+		self.assertAlmostEqual(firm.logic.nm_initial_log_size, 1e-3)
+		self.assertAlmostEqual(firm.logic.nm_min_log_size, 3e-5)
+		self.assertEqual(firm.logic.nm_max_vertex_age, 20)
+		self.assertAlmostEqual(firm.logic.nm_max_log_step, 1e-3)
+		self.assertTrue(firm.logic._nm._use_log_coordinates)
+
+	def test_nm_uses_small_seed_prices_for_first_three_steps(self):
+		_, firm, labor_market, goods_market = make_monetary_economy()
+		enable_stepwise_pricing(firm)
 		w0, p0 = labor_market.price, goods_market.price
+		seed_scale = math.exp(firm.logic.nm_initial_log_size)
 
 		firm.update_prices()  # step 0
 		self.assertAlmostEqual(labor_market.price, w0)
@@ -225,16 +379,17 @@ class NelderMeadPricingTests(unittest.TestCase):
 
 		firm.logic.record_profit(0)
 		firm.update_prices()  # step 1 — scaled wage seed
-		self.assertAlmostEqual(labor_market.price, w0 * 1.2)
+		self.assertAlmostEqual(labor_market.price, w0 * seed_scale)
 		self.assertAlmostEqual(goods_market.price, p0)
 
 		firm.logic.record_profit(0)
 		firm.update_prices()  # step 2 — scaled price seed
 		self.assertAlmostEqual(labor_market.price, w0)
-		self.assertAlmostEqual(goods_market.price, p0 * 1.2)
+		self.assertAlmostEqual(goods_market.price, p0 * seed_scale)
 
 	def test_nm_transitions_to_reflect_phase_after_step_3(self):
 		_, firm, labor_market, goods_market = make_monetary_economy()
+		enable_stepwise_pricing(firm)
 		for _ in range(3):
 			firm.update_prices()
 			firm.logic.record_profit(0)
@@ -245,6 +400,7 @@ class NelderMeadPricingTests(unittest.TestCase):
 
 	def test_nm_accepts_improved_reflection(self):
 		_, firm, labor_market, goods_market = make_monetary_economy()
+		enable_stepwise_pricing(firm)
 		# Give seeds distinct profits so best=10, second=5, worst=0.
 		firm.update_prices()
 		firm.logic.record_profit(10)
@@ -258,7 +414,7 @@ class NelderMeadPricingTests(unittest.TestCase):
 		firm.update_prices()  # step 4: should accept and re-enter reflect
 		self.assertEqual(firm.logic._nm._action, 'reflect')
 
-	def test_nm_prices_are_always_positive(self):
+	def test_instantaneous_prices_are_always_positive(self):
 		_, firm, labor_market, goods_market = make_monetary_economy()
 		for i in range(10):
 			firm.update_prices()
@@ -287,11 +443,62 @@ class MonetarySimulationTests(unittest.TestCase):
 		goods_market.handle_transactions()
 
 		goods_profit = firm.step_production - goods_market.volume
+		firm.step_goods_imbalance = goods_profit
 		firm.step_profit_goods = goods_profit
-		firm.logic.record_profit(goods_profit)
+		real_profit = (
+			firm.step_production
+			- labor_market.price / goods_market.price * firm.step_labor
+		)
+		firm.step_real_profit = real_profit
+		firm.logic.record_profit(real_profit)
 
 		for market in [labor_market, goods_market]:
 			market.commit_price()
+
+	def _run_monetary_horizon(self, dt, total_time=0.1):
+		household, firm, labor_market, goods_market = make_monetary_economy(
+			forbid_negative_cash=True,
+		)
+		for _ in range(round(total_time / dt)):
+			for agent in [household, firm]:
+				agent.step_preprocess()
+			for agent in [household, firm]:
+				agent.update_prices()
+			for agent in [household, firm]:
+				agent.update_volumes()
+
+			labor_market.volume = labor_market.supply_volume * dt
+			labor_market.handle_transactions()
+			firm.step_production = (
+				firm.step_labor * firm.step_effective_productivity
+			)
+			goods_market.volume = min(
+				goods_market.demand_volume * dt,
+				firm.step_production,
+			)
+			goods_market.handle_transactions()
+			real_profit_rate = (
+				firm.step_production
+				- labor_market.price / goods_market.price * firm.step_labor
+			) / dt
+			firm.logic.record_profit(real_profit_rate)
+
+			if firm.cash > 1e-9 and household.cash > 1e-9:
+				dividend = 0.1 * dt * math.log(firm.cash / household.cash)
+				dividend = min(dividend, firm.cash)
+				dividend = max(dividend, -household.cash)
+				firm.cash -= dividend
+				household.cash += dividend
+
+			labor_market.commit_price()
+			goods_market.commit_price()
+
+		return (
+			labor_market.price,
+			goods_market.price,
+			household.cash,
+			firm.cash,
+		)
 
 	def test_one_monetary_step_conserves_total_cash(self):
 		household, firm, labor_market, goods_market = make_monetary_economy()
@@ -308,12 +515,12 @@ class MonetarySimulationTests(unittest.TestCase):
 
 		self.assertLessEqual(goods_market.volume, firm.step_production + 1e-12)
 
-	def test_goods_profit_is_nonnegative(self):
+	def test_goods_imbalance_is_nonnegative(self):
 		household, firm, labor_market, goods_market = make_monetary_economy()
 
 		self._run_one_monetary_step(household, firm, labor_market, goods_market)
 
-		self.assertGreaterEqual(firm.step_profit_goods, 0)
+		self.assertGreaterEqual(firm.step_goods_imbalance, 0)
 
 	def test_firm_absorbs_all_household_labor_supply(self):
 		household, firm, labor_market, goods_market = make_monetary_economy()
@@ -321,6 +528,35 @@ class MonetarySimulationTests(unittest.TestCase):
 		self._run_one_monetary_step(household, firm, labor_market, goods_market)
 
 		self.assertAlmostEqual(labor_market.volume, labor_market.supply_volume)
+
+	def test_frozen_objective_matches_realized_real_operating_profit(self):
+		household, firm, labor_market, goods_market = make_monetary_economy()
+
+		self._run_one_monetary_step(household, firm, labor_market, goods_market)
+
+		realized_real_profit = (
+			firm.step_production
+			- labor_market.price / goods_market.price * firm.step_labor
+		)
+		self.assertAlmostEqual(
+			realized_real_profit,
+			firm.logic.nm_last_predicted_profit,
+			places=12,
+		)
+		self.assertAlmostEqual(firm.step_goods_imbalance, 0, places=7)
+
+	def test_time_refinement_converges(self):
+		coarse = self._run_monetary_horizon(0.002)
+		medium = self._run_monetary_horizon(0.001)
+		fine = self._run_monetary_horizon(0.0005)
+		reference = self._run_monetary_horizon(0.00025)
+		coarse_error = sum(abs(x - y) for x, y in zip(coarse, reference))
+		medium_error = sum(abs(x - y) for x, y in zip(medium, reference))
+		fine_error = sum(abs(x - y) for x, y in zip(fine, reference))
+
+		self.assertLessEqual(medium_error, coarse_error)
+		self.assertLessEqual(fine_error, medium_error)
+		self.assertLess(fine_error, 1e-3)
 
 
 if __name__ == '__main__':
